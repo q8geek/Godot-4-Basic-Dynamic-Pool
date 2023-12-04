@@ -1,183 +1,174 @@
 using Godot;
-using System;
 using System.Collections.Generic;
-using System.Linq;
 
-public class PoolEntry
-{
-    public string name;
-    public PackedScene pack;
-    public Queue<Node> queue;
-}
+
+/// <summary>
+///     Contains a dictionary of PackedScene and Queue<Node> for objects to disable to be re-used.
+/// </summary>
 
 public class Pool
 {
-    public PackedScene[] templates;
-    public Node parentNode;
-    public List<PoolEntry> entries;
-
+    private Dictionary<PackedScene, Queue<Node>> entries;
+    private Node poolParent;
+    
     public static Pool instance;
-    public bool debug = false;
-
+    
     /// <summary>
-    /// Gets a PackedScene providing name.
+    ///     Pool class' constructor. It receives an array of the PackedScenes to be pooled, and create Queue<Node> for each.
     /// </summary>
-    /// <param name="name">PackedScene's name (Case sensitive).</param>
-    /// <returns>PackedScene if there's a match, or null if there isn't.</returns>
-    public PackedScene GetPackFromName(string name)
+   
+    /// <param name="packs">The PackedScenes that needs to be queued.</param>
+    /// <param name="poolParent">The Node to act as the default parent node for Instantiated Nodes from PackedScenes.</param>
+    public Pool(PackedScene[] packs, Node poolParent)
     {
-        foreach (PackedScene p in templates)
+        if (instance != null) return;
+
+        instance = this;
+        entries = new Dictionary<PackedScene, Queue<Node>>();
+
+        foreach (PackedScene pack in packs)
         {
-            if (GetNameFromPack(p) == name) return p;
+            entries.Add(pack, new Queue<Node>());
         }
 
-        return null;
+        this.poolParent = poolParent;
     }
 
     /// <summary>
-    /// Get's a pool's entry providing name.
+    ///     This method stores the unneeded Node in its relative Queue to be reused later.
     /// </summary>
-    /// <param name="name">PackedScene's name.</param>
-    /// <returns>PoolEntry if it exist, null if it doesn't.</returns>
-    public PoolEntry GetEntryFromName(string name)
-    {
-        foreach (PoolEntry ent in entries)
-        {
-            if (ent.name == name) return ent;
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Extract PackedScene's root node's name providing the PackedScene itself.
-    /// </summary>
-    /// <param name="pack">PackedScene to extract the name from.</param>
-    /// <returns>String of the PackedScene's root node's name.</returns>
-    public string GetNameFromPack(PackedScene pack)
-    {
-        RegEx reg = new RegEx();
-        reg.Compile("\"(.*?)\""); string packName = pack._Bundled.Values.ToArray()[0].ToString().Trim();
-
-        return reg.Search(packName).Strings[0].Replace("\"", "");
-    }
-
-    /// <summary>
-    /// Initialize the pool providing templates/scenes as an array, and the node to hold all instantiated objects.
-    /// </summary>
-    /// <param name="temps">Templates/Scenes as PackedScene.</param>
-    /// <param name="parent">The node that will be used to parent instantiated nodes.</param>
-    /// <returns>True/False of the initializatoin's success.</returns>
-    public bool Innit(PackedScene[] temps, Node parent)
-    {
-        if (debug) GD.Print("... Initializing pool...");
-        
-        if (instance == null)
-        {
-            instance = this;
-            if (debug) GD.Print("... Assigned instance.");
-            templates = temps;
-            if (debug) GD.Print("... Assigned templates.");
-            parentNode = parent;
-            if (debug) GD.Print("... Assigned parent node.");
-            entries = new List<PoolEntry>();
-            foreach (PackedScene p in templates)
-            {
-                Register(p);
-            }
-            if (debug) GD.Print("Pool is ready.");
-            return true;
-        }
-        if (debug) GD.PrintErr("Failed to assign instance: Pool.instance != null!");
-        return false;
-    }
-
-    /// <summary>
-    /// Registers and adds a PackedScene to the pool's templates.
-    /// </summary>
-    /// <param name="pack">PackedScene to register in the pool.</param>
-    /// <returns>True/False of the registration's success.</returns>
-    public bool Register(PackedScene pack)
+    /// <param name="node">The unneeded Node. (CASE SENSITIVE)</param>
+    /// <param name="name">The Node's original name. (The PackedScene's root node's name, basically)</param>
+    /// <returns>
+    ///     Returns a boolean result whether storing the Node to its relative PackedScene was successful.
+    /// </returns>
+    public bool Store(Node node, string name)
     {
         try
         {
-            PoolEntry entry = new PoolEntry();
-            entry.name = GetNameFromPack(pack);
-            entry.pack = pack;
-            entry.queue = new Queue<Node>();
-            if (debug) GD.Print("... Attempting to register " + entry.name);
-
-            entries.Add(entry);
-            if (debug) GD.Print("Added \"" + entry.name + "\" in the pool.");
-            return true;
-        }
-        catch (Exception e)
-        {
-            if (debug) GD.PrintErr("Failed to register " + pack.ResourceName + "!: " +  e.Message);
-            return false;
-        }
-    }
-
-
-    /// <summary>
-    /// Get's an object from the pool providing the object's name.
-    /// </summary>
-    /// <param name="nodeName">Object's name.</param>
-    /// <returns>Node of the object from the pool, or null if the operation failed.</returns>
-    /// <remarks>If you must rename the Node, make sure that you don't change the first part up to the first ":"</remarks>
-
-    public Node GetPooled(string nodeName)
-    {
-        if (debug) GD.Print("... Attempting to get " +  nodeName + " from pool");
-        foreach(PoolEntry entry in entries)
-        {
-            if (entry.name == nodeName)
+            foreach (KeyValuePair<PackedScene, Queue<Node>> pair in entries)
             {
-                if (entry.queue.Count > 0) return entry.queue.Dequeue();
-                else
+                PackedScene packedScene = pair.Key;
+                string packName = packedScene.GetState().GetNodeName(0);
+                if (packName == name)
                 {
-                    foreach(PackedScene pack in templates)
-                    {
-                        if (pack == entry.pack)
-                        {
-                            Node n = pack.Instantiate();
-                            parentNode.AddChild(n);
-                            n.Name = entry.name + ":";
-                            if (debug) GD.Print(nodeName + " has been successfully retreived.");
-                            return n;
-                        }
-                    }
-                    if (debug) GD.PrintErr("Failed to get " + nodeName + " from pool!");
-                    return null;
+                    entries[pair.Key].Enqueue(node);
+                    node.Reparent(poolParent);
+                    return true;
                 }
             }
+            
+            return false;
         }
-        return null;
+        catch
+        { 
+            return false; 
+        }
     }
 
     /// <summary>
-    /// Used to store the unwanted Node inside the pool given the Node's PackedScene is already registered
+    ///     Return a string info of the pool's entries and counts.
     /// </summary>
-    /// <param name="node">Registered node</param>
-    /// <returns>True/False of the operation's success</returns>
-    /// <remarks>Make sure the node's name starts with the original PackedScene's original name followed by ":"</remarks>
-    
-    public bool StoreObject(Node node)
+    /// <returns>A string of each PackedScene and its Queue count in this format "| NAME:COUNT | NAME:COUNT |".</returns>
+    public override string ToString()
     {
-        if (debug) GD.Print("... Attempting to store " + node.Name + " in pool.");
-        string oName = node.Name.ToString().Split(':')[0];
-        foreach(PoolEntry entry in entries)
+        string text = "| ";
+        foreach (KeyValuePair<PackedScene,Queue<Node>> pair in entries)
         {
-            if (oName.Contains(entry.name))
-            {
-                if (debug) GD.Print("Successfully stored " + node.Name + " in pool.");
-                entry.queue.Enqueue(node);
-                return true;
-            }
+            PackedScene packedScene = pair.Key;
+            text += packedScene.GetState().GetNodeName(0) + ":" + pair.Value.Count + " | ";
         }
-        if (debug) GD.PrintErr("Failed to store " + node.Name + " in pool!");
 
-        return false;
+        return text.Trim();
     }
 
+    /// <summary>
+    ///     This method returns a Node from the PackedScene matching the "name" provided. If the PackedScene's queue is empty, it'll Instantiate a new one and return it.
+    /// </summary>
+    /// <param name="name">The name of the PackedScene's root Node's name required to return. (CASE SENSITIVE)</param>
+    /// <returns>A Node dequeued from the pooled PackedScene, or null if PackedScene wasn't found.</returns>
+    public Node Get(string name)
+    {
+        Node node = null;
+
+        try
+        {
+            GD.Print("Trying " + name);
+            foreach (KeyValuePair<PackedScene, Queue<Node>> pair in entries)
+            {
+                PackedScene packedScene = pair.Key;
+                string packName = packedScene.GetState().GetNodeName(0);
+
+                if (node == null && packName == name)
+                {
+                    if (entries[pair.Key].Count == 0)
+                    {
+                        node = pair.Key.Instantiate();
+                        poolParent.AddChild(node);
+                    }
+                    
+                    node = entries[pair.Key].Dequeue();
+                    if (node.GetParent() != poolParent) node.Reparent(poolParent);
+                }
+            }
+            return node;
+        }
+        catch
+        {
+            return node;
+        }
+    }
+
+    /// <summary>
+    /// Returns Queue count of a pooled PackedScene, given PackedScene's reference.
+    /// </summary>
+    /// <param name="packed">PackedScene's reference.</param>
+    /// <returns>Queue's count if successful, -1 if not.</returns>
+    public int GetCount(PackedScene packed)
+    {
+        int ret = -1;
+
+        foreach (KeyValuePair<PackedScene,Queue<Node>> pair in entries)
+        {
+            if (packed == pair.Key)
+                return pair.Value.Count;
+        }
+
+        return ret;
+    }
+
+    /// <summary>
+    /// Returns Queue count of a pooled PackedScene, given PackedScene's name.
+    /// </summary>
+    /// <param name="name">PackedScene's name.</param>
+    /// <returns>Queue's count if successful, -1 if not.</returns>
+    public int GetCount(string name)
+    {
+        int ret = -1;
+
+        foreach (KeyValuePair<PackedScene, Queue<Node>> pair in entries)
+        {
+            PackedScene packedScene = pair.Key;
+            string packName = packedScene.GetState().GetNodeName(0);
+            if (packName == name)
+                return pair.Value.Count;
+        }
+
+        return ret;
+    }
+
+    /// <summary>
+    /// Returns an array of PackedScenes root Node's name.
+    /// </summary>
+    /// <returns>An array of all pooled PackedScenes root Node's name.</returns>
+    public string[] GetNames()
+    {
+        List<string> names = new List<string>();
+        foreach (PackedScene pack in entries.Keys)
+        {
+            names.Add(pack.GetState().GetNodeName(0));
+        }
+
+        return names.ToArray();
+    }
 }
